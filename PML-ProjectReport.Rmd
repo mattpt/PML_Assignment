@@ -1,0 +1,240 @@
+---
+title: 'Practical Machine Learning: Prediction Assignment'
+author: "Matt Phipps-Taylor"
+date: "June 17, 2015"
+output: html_document
+---
+
+# **Introduction**
+
+This report addresses the challenge set in the project assignment of the Coursera Practical Machine Learning course, by Johns Hopkins University (Bloomberg School of Public Health). 
+
+The challenge is to predict whether or not weight-lifting exercises have been performed with correct technique (in 5 categories), based on the data collected from accelerometers in a study of six participants. 
+
+This report explains the process followed data analysis and preparation, the consideration and selection of a prediction model, and the effectiveness of that model.
+
+More information regarding the original study and data collected can be found at <http://groupware.les.inf.puc-rio.br/har>.
+
+The training and test datasets used for this project can be found [here](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv) and [here](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv), respectively.
+
+The R code included in this report will reproduce the results described. The following code block includes the list of required packages, and sets the seed used to replicate "random" sequences.
+
+```{r eval=TRUE, tidy = TRUE, result="hide", message=FALSE}
+setwd("~/TrainingR/MachineLearnProject")
+library(caret)
+library(rattle)
+library(reshape2)
+library(plyr)
+library(ggplot2)
+library(gbm)
+library(klaR)
+set.seed(54321)
+
+#Optionally, for improved performance
+library(doParallel)
+cl <- makeCluster(detectCores()) 
+registerDoParallel(cl) 
+```
+
+# **Data preparation**
+
+## Loading data
+
+The training and test data were loaded into R for analysis. Both contain 160 variables, of which 159 are in common. The training set contains ~20k observations, including the outcome variable "classe", and the test set contains 20 observations and an additional identifier variable. 
+
+```{r eval=TRUE, tidy=TRUE}
+fulltrainset <- read.csv("pml-training.csv")
+finaltestset <- read.csv("pml-testing.csv")
+```
+
+## Missing data
+
+Each of the variables in the training data were checked for the number of observations missing a value, and those with more than 50% missing were removed from both training and test sets.
+
+```{r eval=TRUE, tidy=TRUE, results="hide", message=FALSE}
+#Check missing counts
+MissingVars <- melt(data.frame(colSums(is.na(fulltrainset))/dim(fulltrainset)[1]))
+MissingVars$rmv <- MissingVars$value>0.5
+table(MissingVars[,3])
+
+#Remove variables with more than 50% NA
+fulltrainset <- fulltrainset[,-which(MissingVars$rmv)]
+finaltestset <- finaltestset[,-which(MissingVars$rmv)]
+```
+
+## Variables with little variability
+
+Each of the remaining variables were checked for the degree of variability, and those with little or zero variability were removed, as they would not be useful predictors in any model.
+
+```{r eval=TRUE, tidy=TRUE, results="hide"}
+#Look for variables with low/zero variability
+VarCheck <- nearZeroVar(fulltrainset, saveMetrics=TRUE)
+table(VarCheck[,4])
+subset(VarCheck,nzv==TRUE)
+
+#Remove those nzv variables from both data sets
+fulltrainset <- fulltrainset[,-which(VarCheck$nzv)]
+finaltestset <- finaltestset[,-which(VarCheck$nzv)]
+```
+
+## Irrelevant variables
+
+Six of the remaining variables are study-specific and not relevant to the challenge of predicting how well weight-lifting exercises are performed, based on the data collected from accelerometers.
+
+* X - a row identifier, which refers to the data collected in this study but would not be a useful predictor in the real world.
+* Timestamps
+ + raw_timestamp_part_1
+ + raw_timestamp_part_2
+ + cvtd_timestamp
+* user_name
+* num_window
+
+These variables were removed, leaving 53.
+
+```{r eval=TRUE, tidy=TRUE, results="hide"}
+fulltrainset <- fulltrainset[,-grep("X|raw_timestamp|cvtd_time|user_name|num_window", colnames(fulltrainset))]
+finaltestset <- finaltestset[,-grep("X|raw_timestamp|cvtd_time|user_name|num_window", colnames(finaltestset))]
+```
+
+
+# **Model consideration**
+
+## Data slicing
+
+The training data was further split, to provide an additional test set for model validation.
+
+```{r eval=TRUE, tidy=TRUE, results="hide"}
+#Create validation set
+sampleset <- createDataPartition(y=fulltrainset$classe, times=1, p=0.5, list=FALSE)
+mytrain <- fulltrainset[sampleset,]
+mytest <- fulltrainset[-sampleset,]
+```
+
+## Model 1: Decision tree
+
+A decision tree model was trained on the training sample, and used to predict the outcome for the cross-validation sample.
+
+```{r eval=TRUE, tidy=TRUE, results="hide", message=FALSE}
+model1 <- train(classe~., data=mytrain, method="rpart")
+fancyRpartPlot(model1$finalModel)
+```
+
+Evaluation of the tree against the validation data set showed the model is approximately 50% accurate.
+
+```{r eval=TRUE, tidy=TRUE, echo=TRUE}
+predict1 <- predict(model1,newdata=mytest[,1:(length(mytest)-1)])
+confusionMatrix(predict1,mytest$classe)$overall[1]
+```
+
+## Model 2: Random Forest
+
+A random forest model was trained on the training sample, and used to predict the outcome for the cross-validation sample.
+
+```{r eval=TRUE, tidy=TRUE, results="hide", message=FALSE}
+model2 <- train(classe~., data=mytrain, method="rf")
+```
+
+Evaluation of the model against the validation data set showed the model is approximately 99% accurate.
+
+```{r eval=TRUE, tidy=TRUE, echo=TRUE}
+predict2 <- predict(model2,newdata=mytest[,1:(length(mytest)-1)])
+confusionMatrix(predict2,mytest$classe)$overall[1]
+```
+
+## Model 3: Boosted trees
+
+A boosted trees model was trained on the training sample, and used to predict the outcome for the cross-validation sample.
+
+```{r eval=TRUE, tidy=TRUE, results="hide"}
+model3 <- train(classe~., data=mytrain, method="gbm")
+```
+
+Evaluation of the model against the validation data set showed the model is approximately 96% accurate.
+
+```{r eval=TRUE, tidy=TRUE, echo=TRUE}
+predict3 <- predict(model3,newdata=mytest[,1:(length(mytest)-1)])
+confusionMatrix(predict3,mytest$classe)$overall[1]
+```
+
+## Model 4: Linear Discriminant Analysis
+
+A LDA model was trained on the training sample, and used to predict the outcome for the cross-validation sample.
+
+```{r eval=TRUE, tidy=TRUE, results="hide"}
+model4 <- train(classe~., data=mytrain, method="lda")
+```
+
+Evaluation of the model against the validation data set showed the model is approximately 70% accurate.
+
+```{r eval=TRUE, tidy=TRUE, echo=TRUE}
+predict4 <- predict(model4,newdata=mytest[,1:(length(mytest)-1)])
+confusionMatrix(predict4,mytest$classe)$overall[1]
+```
+
+## Model 5: Naive Bayes
+
+A Naive Bayes model was trained on the training sample, and used to predict the outcome for the cross-validation sample.
+
+```{r eval=TRUE, tidy=TRUE, results="hide", message=FALSE, warning=FALSE}
+model5 <- train(classe~., data=mytrain, method="nb")
+```
+
+Evaluation of the model against the validation data set showed the model is approximately 74% accurate.
+
+```{r eval=TRUE, tidy=TRUE, echo=TRUE, message=FALSE, warning=FALSE}
+predict5 <- predict(model5,newdata=mytest[,1:(length(mytest)-1)])
+confusionMatrix(predict5,mytest$classe)$overall[1]
+```
+
+
+# **Conclusion**
+
+## Final model selection
+
+Of the five models tested, the most accurate (when compared to the cross-validation data sample) was the random forest, at around 99%. The out-of-sample error would be expected as *1-accuracy*, or around 1%.
+
+The model description:
+
+```{r eval=TRUE, tidy=TRUE, echo=TRUE}
+model2
+```
+
+The confusion matrix when model predictions for the cross-validation set were compared to the known outcomes:
+
+```{r eval=TRUE, tidy=TRUE, echo=TRUE}
+confusionMatrix(predict2,mytest$classe)
+```
+
+A plot of the error rate against number of trees shows that the default of 500 trees is somewhat unnecessary:
+
+```{r}
+plot(model2$finalModel, main = "Error rate against number of trees")
+```
+
+Plot of the most important variables:
+
+```{r}
+varImpPlot(model2$finalModel, main="RF variable importance")
+```
+
+## Final prediction generation
+
+Finally, the random forest model was applied to the assignment test set (of 20 observations), to generate the submission predictions. When submitted, these predictions were found to be 100% accurate.
+
+```{r eval=TRUE, tidy=TRUE, results="hide"}
+SubmitPredict <- predict(model2, newdata=finaltestset[,1:(length(mytest)-1)])
+
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(SubmitPredict)
+
+stopCluster(cl)
+```
+
+
